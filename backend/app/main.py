@@ -17,8 +17,8 @@ app = FastAPI(title="Chat API", version="1.0.0")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://chat-app-six-lilac.vercel.app"],  #  React app URL
-    # allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],  #  React app URL
+    # allow_origins=["https://chat-app-six-lilac.vercel.app"],  #  React app URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
