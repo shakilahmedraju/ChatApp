@@ -1,3 +1,4 @@
+const API_BASE = import.meta.env.VITE_API_BASE_URL
 class WebSocketService {
   constructor() {
     this.socket = null;
@@ -10,7 +11,8 @@ class WebSocketService {
       this.disconnect();
     }
 
-    this.socket = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
+    // this.socket = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
+    this.socket = new WebSocket(`${API_BASE.replace(/^http/, 'ws')}/ws?token=${token}`);
 
     this.socket.onopen = () => {
       console.log('WebSocket connected');
