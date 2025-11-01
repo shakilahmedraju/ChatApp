@@ -547,7 +547,7 @@ import SidePanel from '../components/SidePanel';
 import { HiDotsVertical, HiPhone, HiVideoCamera } from "react-icons/hi";
 
 function Chat() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -569,16 +569,29 @@ function Chat() {
   const messagesContainerRef = useRef(null);
   const menuRef = useRef();
 
+  // useEffect(() => {
+  //   if (user) initializeChat();
+
+  //   return () => {
+  //     webSocketService.disconnect();
+  //     handlerRegistered.current = false;
+  //   };
+  // }, [user]);
+
   useEffect(() => {
-    if (user) initializeChat();
+    if (user && token) {
+      initializeChat();
+    }
 
     return () => {
       webSocketService.disconnect();
       handlerRegistered.current = false;
     };
-  }, [user]);
+  }, [user, token]);
 
-  
+
+
+
 
 
   // Close side panel when clicking outside
