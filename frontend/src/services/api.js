@@ -45,7 +45,41 @@ export const conversationsAPI = {
     api.get(`/conversations/${conversationId}/messages`, {
       params: { limit, skip },
     }),
+
+
+    // DELETE conversation
+  deleteConversation: (conversationId) =>
+    api.delete(`/conversations/${conversationId}`),
+
   
+};
+
+
+
+export const attachmentsAPI = {  
+  // Fetch attachments for a conversation with pagination
+  getAttachments: (conversationId, limit = 30, skip = 0) =>
+    api.get(`/attachments/${conversationId}`, {
+      params: { limit, skip },
+    }),
+
+  // Upload an attachment
+  uploadAttachment: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    return api.post("/attachments/upload", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+  },
+
+  // Delete an attachment
+  deleteAttachment: (attachmentId) => api.delete(`/attachments/${attachmentId}`),
+
+
+
 };
 
 

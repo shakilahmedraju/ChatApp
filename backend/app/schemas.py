@@ -23,11 +23,34 @@ class User(UserBase):
     class Config:
         from_attributes = True
 
+
+class MessageAttachmentBase(BaseModel):
+    file_url: str
+    file_name: str
+    file_type: Optional[str] = None
+
+
+class MessageAttachmentCreate(MessageAttachmentBase):
+    pass
+
+
+class MessageAttachment(MessageAttachmentBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+        
+# class MessageBase(BaseModel):
+#     content: str
+
 class MessageBase(BaseModel):
-    content: str
+    content: Optional[str] = None
+
 
 class MessageCreate(MessageBase):
     conversation_id: int
+    attachments: Optional[List[MessageAttachmentCreate]] = []
 
 class Message(MessageBase):
     id: int
@@ -35,6 +58,7 @@ class Message(MessageBase):
     conversation_id: int
     created_at: datetime
     sender: User
+    attachments: List[MessageAttachment] = []
 
     class Config:
         from_attributes = True
@@ -48,6 +72,7 @@ class ConversationCreate(ConversationBase):
 
 class Conversation(ConversationBase):
     id: int
+    created_by: int  # Add created_by field
     created_at: datetime
     users: List[User]
     messages: List[Message]
@@ -59,3 +84,9 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     user: User
+
+
+# Add delete response schema
+class DeleteResponse(BaseModel):
+    message: str
+    deleted: bool

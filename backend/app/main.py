@@ -1,7 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocket
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import desc, func
 from datetime import timedelta
 import json
 from . import websocket as ws_manager
@@ -9,16 +13,21 @@ from . import websocket as ws_manager
 from . import models, schemas, database, auth, websocket
 from .database import get_db, engine
 
+import os
+import uuid
+
 # Create tables
 models.Base.metadata.create_all(bind=engine)
+
+
 
 app = FastAPI(title="Chat API", version="1.0.0")
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  #  React app URL
-    # allow_origins=["https://chat-app-six-lilac.vercel.app"],  #  React app URL
+    # allow_origins=["http://localhost:3000", "http://localhost:5173"],  #  React app URL
+    allow_origins=["https://chat-app-six-lilac.vercel.app"],  #  React app URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,7 +138,8 @@ def create_conversation(
     # Create new conversation
     db_conversation = models.Conversation(
         name=conversation.name,
-        is_group=1 if conversation.is_group else 0
+        is_group=1 if conversation.is_group else 0,
+        created_by=current_user.id  # Set the creator as admin
     )
     
     # Add current user to conversation
@@ -146,14 +156,29 @@ def create_conversation(
     db.refresh(db_conversation)
     return db_conversation
 
+# @app.get("/conversations", response_model=list[schemas.Conversation])
+# def get_conversations(
+#     current_user: models.User = Depends(auth.get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     conversations = db.query(models.Conversation).filter(
+#         models.Conversation.users.any(id=current_user.id)
+#     ).all()
+#     return conversations
+
 @app.get("/conversations", response_model=list[schemas.Conversation])
 def get_conversations(
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    conversations = db.query(models.Conversation).filter(
-        models.Conversation.users.any(id=current_user.id)
-    ).all()
+    conversations = (
+        db.query(models.Conversation)
+        .filter(models.Conversation.users.any(id=current_user.id))
+        .outerjoin(models.Message, models.Message.conversation_id == models.Conversation.id)
+        .group_by(models.Conversation.id)
+        .order_by(func.coalesce(func.max(models.Message.created_at), models.Conversation.created_at).desc())
+        .all()
+    )
     return conversations
 
 @app.get("/conversations/{conversation_id}", response_model=schemas.Conversation)
@@ -231,13 +256,213 @@ def get_messages(
     # Return messages reversed (oldest first) so frontend can append at bottom
     return list(reversed(messages))
 
-# @app.websocket("/ws")
-# async def websocket_endpoint(
-#     websocket: WebSocket,
-#     token: str,
-#     db: Session = Depends(get_db)
-# ):
-#     await websocket.handle_websocket(websocket, token, db)
+@app.delete("/conversations/{conversation_id}", response_model=schemas.DeleteResponse)
+def delete_conversation(
+    conversation_id: int,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    conversation = db.query(models.Conversation).filter(
+        models.Conversation.id == conversation_id
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Check if user is in the conversation
+    if current_user not in conversation.users:
+        raise HTTPException(status_code=403, detail="Not a member of this conversation")
+    
+    # For one-to-one chats: anyone can delete
+    # For group chats: only admin can delete
+    if conversation.is_group:
+        if conversation.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="Only group admin can delete the group")
+    
+    # Delete all messages in the conversation
+    db.query(models.Message).filter(
+        models.Message.conversation_id == conversation_id
+    ).delete()
+    
+    # Remove all user associations
+    conversation.users.clear()
+    
+    # Delete the conversation
+    db.delete(conversation)
+    db.commit()
+    
+    return {"message": "Conversation deleted successfully", "deleted": True}
+
+
+@app.delete("/messages/{message_id}", response_model=schemas.DeleteResponse)
+def delete_message(
+    message_id: int,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    message = db.query(models.Message).filter(models.Message.id == message_id).first()
+    
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # Check if user is the sender or in a group where they're admin
+    conversation = db.query(models.Conversation).filter(
+        models.Conversation.id == message.conversation_id
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # User can delete their own messages
+    # In groups, admin can delete any message
+    can_delete = (
+        message.sender_id == current_user.id or
+        (conversation.is_group and conversation.created_by == current_user.id)
+    )
+    
+    if not can_delete:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this message")
+    
+    # If message has a file, delete it from storage
+    # if message.file_url:
+    #     try:
+    #         file_path = message.file_url.replace("/uploads/", "uploads/")
+    #         if os.path.exists(file_path):
+    #             os.remove(file_path)
+    #     except Exception as e:
+    #         print(f"Error deleting file: {e}")
+    
+    db.delete(message)
+    db.commit()
+    
+    return {"message": "Message deleted successfully", "deleted": True}
+
+
+
+
+
+
+
+UPLOAD_DIR = "uploads"  # make sure folder exists
+# Ensure directory exists
+os.makedirs("uploads", exist_ok=True)
+
+# Serve uploaded files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+
+# @app.post("/attachments/upload")
+# async def upload_file(request: Request, file: UploadFile = File(...)):
+#     file_location = os.path.join(UPLOAD_DIR, file.filename)
+
+#     # Save file to disk
+#     with open(file_location, "wb") as f:
+#         f.write(await file.read())
+
+#     # Convert Windows backslashes to forward slashes for URL
+#     relative_path = file_location.replace("\\", "/")
+
+#     # Construct absolute URL
+#     base_url = str(request.base_url).rstrip("/")
+#     file_url = f"{base_url}/{relative_path}"
+
+#     return JSONResponse({
+#         "file_url": file_url,
+#         "file_name": file.filename,
+#         "file_type": file.content_type,
+#     })
+
+
+@app.post("/attachments/upload")
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    conversation_id: int = None,  # Optional: if you want to associate immediately
+    db: Session = Depends(get_db)
+):
+    filename = f"{uuid.uuid4().hex}_{file.filename}"
+    file_location = os.path.join(UPLOAD_DIR, filename)
+    # Save file to disk
+    with open(file_location, "wb") as f:
+        f.write(await file.read())
+
+    # Convert backslashes for URL
+    relative_path = file_location.replace("\\", "/")
+    base_url = str(request.base_url).rstrip("/")
+    file_url = f"{base_url}/{relative_path}"
+
+    # Save to DB (MessageAttachment without message_id yet)
+    db_attachment = models.MessageAttachment(
+        message_id=None,  # Will associate when the message is sent via WebSocket
+        file_url=file_url,
+        file_name=file.filename,
+        file_type=file.content_type
+    )
+    db.add(db_attachment)
+    db.commit()
+    db.refresh(db_attachment)
+
+    return JSONResponse({
+        "id": db_attachment.id,
+        "file_url": db_attachment.file_url,
+        "file_name": db_attachment.file_name,
+        "file_type": db_attachment.file_type
+    })
+
+# delete attachment
+@app.delete("/attachments/{attachment_id}", response_model=dict)
+def delete_attachment(
+    attachment_id: int, 
+    request: Request,
+    db: Session = Depends(database.get_db)
+    ):
+    attachment = db.query(models.MessageAttachment).filter(models.MessageAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # Optional: delete file from storage if needed
+    # file_path = attachment.file_url  # already something like "uploads/filename.png"
+    # print("file_path:", file_path)
+    # if os.path.exists(file_path):
+    #     os.remove(file_path)
+
+    # Delete file from storage if exists
+    file_path = attachment.file_url.replace(str(request.base_url), "").lstrip("/")
+    file_path = os.path.join(os.getcwd(), file_path)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    db.delete(attachment)
+    db.commit()
+    return {"detail": "Attachment deleted successfully"}
+
+# Get attachments for a conversation
+@app.get("/attachments/{conversation_id}")
+def get_conversation_attachments(
+    conversation_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(30, le=100),
+    db: Session = Depends(database.get_db)
+):
+    attachments = (
+        db.query(models.MessageAttachment)
+        .join(models.Message)
+        .filter(models.Message.conversation_id == conversation_id)
+        .order_by(models.Message.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "file_url": a.file_url,
+            "file_name": a.file_name,
+            "file_type": a.file_type,
+        }
+        for a in attachments
+    ]
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(
@@ -247,6 +472,8 @@ async def websocket_endpoint(
 ):
     print("token:", token)
     await ws_manager.handle_websocket(websocket, token, db)
+
+
 
 if __name__ == "__main__":
     import uvicorn

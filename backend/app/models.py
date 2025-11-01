@@ -30,17 +30,36 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=True)  # For group chats
     is_group = Column(Integer, default=0)  # 0 for one-to-one, 1 for group
+    created_by = Column(Integer, ForeignKey("users.id"))  # Admin who created the group
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     users = relationship("User", secondary=conversation_users, back_populates="conversations")
     messages = relationship("Message", back_populates="conversation")
+    admin = relationship("User", foreign_keys=[created_by])
+
+
+
+class MessageAttachment(Base):
+    __tablename__ = "message_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"))
+    file_url = Column(String, nullable=False)
+    file_name = Column(String, nullable=False)
+    file_type = Column(String, nullable=True)  # image/pdf/doc/etc.
+
+    message = relationship("Message", back_populates="attachments")
+
+
+   
+
 
 class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"))
     sender_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -48,3 +67,4 @@ class Message(Base):
     # Relationships
     conversation = relationship("Conversation", back_populates="messages")
     sender = relationship("User", back_populates="messages")
+    attachments = relationship("MessageAttachment", back_populates="message", cascade="all, delete-orphan")
